@@ -1,0 +1,87 @@
+# ROS 2 / colcon build artifacts
+/build/
+/install/
+/log/
+/test_results/
+.colcon/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Python packaging artifacts
+*.egg-info/
+.eggs/
+/dist/
+/sdist/
+/wheels/
+pip-wheel-metadata/
+
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# C/C++ and CMake artifacts (for future ROS 2 native nodes)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+
+# ROS runtime data and recordings
+.ros/
+rosbag2_*/
+*.bag
+*.db3
+*.mcap
+*.active
+
+# Large camera/point-cloud captures
+captures/
+recordings/
+datasets/
+*.ply
+*.pcd
+
+# Logs, crash dumps, and temporary files
+*.log
+core
+core.*
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
+
+# Local environment files (keep a documented template if one is added)
+.env
+.env.*
+!.env.example
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

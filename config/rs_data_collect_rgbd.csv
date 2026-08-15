@@ -1,0 +1,4 @@
+# librealsense rs-data-collect profile used for direct device diagnostics.
+# stream,width,height,fps,format,index
+DEPTH,640,480,30,Z16,0
+COLOR,640,480,30,RGB8,0
