@@ -269,6 +269,208 @@ ros2 topic info /d455/d455/color/image_raw/compressed -v
 发布端应显示 `BEST_EFFORT` 和 `VOLATILE`。完成以上步骤后，两路相机即已成功
 启动并以 JPEG 压缩格式发布彩色图像。
 
+## 扩展到三台或更多相机
+
+当前启动文件明确创建 D405 和 D455 两个节点，不会自动启动后来接入的相机。
+增加第三台相机需要完成设备确认、唯一命名、节点配置、错峰启动和三路并发测试。
+下面以新增一台 D435 为例；换成其他型号时应使用该型号实际支持的流配置。
+
+### 1. 先单独确认新相机
+
+暂时断开原有两台相机，只连接新相机，然后查询型号、序列号和 USB 速率：
+
+```bash
+source /opt/ros/humble/setup.bash
+rs-enumerate-devices | grep -E "Name|Serial Number|Usb Type Descriptor"
+lsusb -t
+```
+
+记录真实序列号，并确认相机工作在 `5000M` 或更高的 USB 3.x 链路。先用官方
+单相机启动文件验证它能独立工作，其中序列号替换为实际值：
+
+```bash
+ros2 launch realsense2_camera rs_launch.py \
+  serial_no:=_123456789012 \
+  camera_name:=d435 \
+  camera_namespace:=d435 \
+  depth_module.depth_profile:=640x480x30 \
+  rgb_camera.color_profile:=640x480x30
+```
+
+确认彩色图和深度图能正常发布后按 `Ctrl+C` 停止节点，再连接另外两台相机。
+
+### 2. 为每台相机分配唯一身份
+
+每台相机必须具有唯一的序列号、`camera_name` 和 `camera_namespace`。例如：
+
+| 相机 | 序列号变量 | camera name | namespace | 压缩彩色图话题 |
+| --- | --- | --- | --- | --- |
+| D405 | `D405_SERIAL` | `d405` | `d405` | `/d405/d405/color/image_raw/compressed` |
+| D455 | `D455_SERIAL` | `d455` | `d455` | `/d455/d455/color/image_raw/compressed` |
+| 新 D435 | `D435_SERIAL` | `d435` | `d435` | `/d435/d435/color/image_raw/compressed` |
+
+即使增加的是第二台 D455，也不能继续使用已经存在的 `d455` 名称。可以使用
+`d455_1`、`d455_2` 等唯一名称，相应话题会变成
+`/d455_2/d455_2/color/image_raw/compressed`。
+
+### 3. 在启动文件中增加设备常量
+
+编辑 `launch/dual_rs.launch.py`，在现有 D405/D455 常量附近加入第三台相机的
+真实序列号、名称和启动延迟：
+
+```python
+D435_SERIAL = "_123456789012"
+D435_NAMESPACE = "d435"
+D435_NAME = "d435"
+
+# D455 在 0 秒启动，D405 在 3 秒启动，第三台在 6 秒启动。
+D435_START_DELAY_SECONDS = 6.0
+```
+
+序列号前面的下划线不能遗漏，它可以防止 ROS 2 把纯数字序列号解析成整数。
+第三台相机的延迟应大于前一台，避免多个 USB 设备同时初始化。
+
+### 4. 创建第三个 RealSense 节点
+
+在 `generate_launch_description()` 中创建第三个节点。D435/D455 等具有独立 RGB
+Camera 的型号使用 `rgb_camera.color_*` 参数：
+
+```python
+d435_node = make_realsense_node(
+    camera_name=D435_NAME,
+    camera_namespace=D435_NAMESPACE,
+    serial_no=D435_SERIAL,
+    device_type="d435",
+    camera_parameters={
+        "depth_module.depth_profile": DEPTH_PROFILE,
+        "depth_module.depth_format": "Z16",
+        "rgb_camera.color_profile": COLOR_PROFILE,
+        "rgb_camera.color_format": "RGB8",
+        "rgb_camera.enable_auto_exposure": True,
+    },
+)
+
+delayed_d435_node = TimerAction(
+    period=D435_START_DELAY_SECONDS,
+    actions=[d435_node],
+)
+```
+
+如果新增的是另一台 D405，彩色图属于 Depth Module，必须改用：
+
+```python
+camera_parameters={
+    "depth_module.depth_profile": DEPTH_PROFILE,
+    "depth_module.depth_format": "Z16",
+    "depth_module.color_profile": COLOR_PROFILE,
+    "depth_module.color_format": "RGB8",
+    "depth_module.enable_auto_exposure": True,
+}
+```
+
+不要直接照搬其他型号的彩色模块参数。如果不确定，应先查看该相机通过官方
+`rs_launch.py` 启动时打印的可用 profile 和参数。
+
+### 5. 把第三个节点加入启动动作
+
+把延迟启动动作加入现有 `actions` 列表：
+
+```python
+actions = [
+    fastdds_profile,
+    d455_node,
+    delayed_d405_node,
+    delayed_d435_node,
+]
+```
+
+这里的 `TimerAction` 延迟从整个 launch 启动时开始计算，因此三个延迟可设置为
+0、3、6 秒。如果继续增加第四台，可以从 9 秒开始，并在实际电脑上根据设备
+初始化耗时调整。
+
+如果以后启用 `PUBLISH_CAMERA_MOUNT_TF`，还必须为新相机增加经过标定的父坐标
+系、XYZ/RPY 外参和对应的静态 TF 节点。不要给新相机发布未经标定的零变换。
+
+### 6. 重新构建并启动
+
+```bash
+cd ~/tianji_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select dual_realsense_launch
+source install/setup.bash
+export ROS_DOMAIN_ID=42
+export ROS_LOCALHOST_ONLY=0
+ros2 launch dual_realsense_launch dual_rs.launch.py
+```
+
+确认三个节点都存在：
+
+```bash
+ros2 node list | grep -E '/d405/d405|/d455/d455|/d435/d435'
+```
+
+确认第三路压缩彩色图类型：
+
+```bash
+ros2 topic type /d435/d435/color/image_raw/compressed
+ros2 topic info /d435/d435/color/image_raw/compressed -v
+```
+
+应该得到 `sensor_msgs/msg/CompressedImage`，发布端 QoS 应为 Best Effort 和
+Volatile。只要 `compressed_image_transport` 已安装，就不需要再为第三台相机
+单独编写压缩转换节点。
+
+### 7. 同时测试三路频率
+
+分别在三个终端中同时运行：
+
+```bash
+ros2 topic hz /d405/d405/color/image_raw/compressed
+```
+
+```bash
+ros2 topic hz /d455/d455/color/image_raw/compressed
+```
+
+```bash
+ros2 topic hz /d435/d435/color/image_raw/compressed
+```
+
+持续观察至少 30～60 秒。三路都应接近 30 Hz，不能只逐路单独测试，因为 JPEG
+编码 CPU、USB 和网络的并发负载只有在三路同时订阅时才会完整出现。
+
+推荐按以下顺序扩大测试范围：
+
+1. 新相机单独启动；
+2. 原有两台相机启动；
+3. 三台相机同时启动但暂不订阅图像；
+4. 同时订阅三路 `/compressed`；
+5. 最后再接入实际算法节点和远端电脑。
+
+这样出现问题时更容易判断是相机配置、USB、JPEG 编码、DDS 还是网络造成的。
+
+### 8. 三台及更多相机的资源检查
+
+增加相机后还应检查以下资源：
+
+- **USB 带宽和供电**：使用 `lsusb -t` 查看拓扑，尽量把相机分散到不同的 USB
+  Root Hub/Host Controller；不要只看每个端口显示的 `5000M`；
+- **共享内存**：当前 Fast DDS profile 为每个参与者配置 64 MiB SHM segment。
+  三个独立相机进程会增加 `/dev/shm` 使用量，可用 `df -h /dev/shm` 检查容量；
+- **CPU**：JPEG 质量 95 的编码由相机电脑完成。三路压缩订阅同时存在时观察
+  `top` 或 `htop`，确认 CPU 没有持续满载；
+- **网络**：场景越复杂，JPEG 单帧越大。使用 `iperf3` 验证链路，并在远端同时
+  测试所有压缩话题；
+- **DDS/UDP**：检查 `net.core.rmem_max`、`net.core.wmem_max`、防火墙、组播和
+  Fast DDS 环境变量；
+- **深度相互干扰**：多台带主动红外发射器的深度相机观察同一区域时，深度图可能
+  互相干扰。若关注深度质量，还需要根据相机型号评估发射器设置、视角和硬件同步；
+- **命名与 TF**：每台相机的节点名、namespace 和 frame ID 必须唯一，安装外参
+  必须分别标定。
+
+如果三路本机都稳定而远端频率下降，应优先确认远端订阅的是 `/compressed`、
+使用 Best Effort QoS，并同时检查三路总带宽，而不是继续修改相机帧率参数。
+
 ## 迁移到另一台电脑
 
 ### 1. 检查相机序列号
